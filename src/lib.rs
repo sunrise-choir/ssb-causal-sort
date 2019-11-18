@@ -21,12 +21,12 @@ use serde_json::Value;
 use ssb_multiformats::multihash::Multihash;
 use std::collections::HashMap;
 
-pub fn causal_sort<T: AsRef<str>>(msgs: &[(Multihash, i32, T)]) -> Vec<i32> {
+pub fn causal_sort<T: AsRef<str>, K: Copy>(msgs: &[(Multihash, K, T)]) -> Vec<K> {
     // Thought: Can we enumerate the iter and use the index as a key for one or both of the hashes?
     let (dag, _, node_to_key_id) = msgs
         .iter()
         .map(|(key, key_id, msg)| {
-            let value: Value = serde_json::from_str(msg.as_ref()).unwrap();
+            let value: Value = serde_json::from_str(msg.as_ref()).unwrap_or(Value::Null);
             let mut refs = Vec::new();
             // Recursively search through the object searching for Multihashes
             find_all_links(&value, &mut refs);
@@ -36,7 +36,7 @@ pub fn causal_sort<T: AsRef<str>>(msgs: &[(Multihash, i32, T)]) -> Vec<i32> {
             (
                 Dag::<u32, u32, usize>::new(),
                 HashMap::<Multihash, NodeIndex<usize>>::new(),
-                HashMap::<NodeIndex<usize>, i32>::new(),
+                HashMap::<NodeIndex<usize>, K>::new(),
             ),
             |(mut dag, mut hash_to_node, mut node_to_key_id), (key, key_id, refs)| {
                 // Check if we've already created a node for key
@@ -61,7 +61,8 @@ pub fn causal_sort<T: AsRef<str>>(msgs: &[(Multihash, i32, T)]) -> Vec<i32> {
     let graph = dag.graph();
     let topo = Topo::new(graph);
     topo.iter(graph)
-        // map the sorted nodes into multihashes
+        // filter_map the sorted nodes into multihashes, taking only the ones that were for the
+        // keys we passed in
         .filter_map(|node| node_to_key_id.get(&node))
         .map(|i| *i)
         .collect()
