@@ -21,40 +21,39 @@ use serde_json::Value;
 use ssb_multiformats::multihash::Multihash;
 use std::collections::HashMap;
 
-pub fn causal_sort(msgs: &[(Multihash, &[u8])]) -> Vec<Multihash> {
+pub fn causal_sort<T: AsRef<str>>(msgs: &[(Multihash, i32, T)]) -> Vec<i32> {
     // Thought: Can we enumerate the iter and use the index as a key for one or both of the hashes?
-    let (dag, _, node_to_hash) = msgs
+    let (dag, _, node_to_key_id) = msgs
         .iter()
-        .map(|(key, msg)| {
-            let value: Value = serde_json::from_slice(msg).unwrap();
+        .map(|(key, key_id, msg)| {
+            let value: Value = serde_json::from_str(msg.as_ref()).unwrap();
             let mut refs = Vec::new();
             // Recursively search through the object searching for Multihashes
             find_all_links(&value, &mut refs);
-            (key, refs)
+            (key, key_id, refs)
         })
         .fold(
             (
                 Dag::<u32, u32, usize>::new(),
                 HashMap::<Multihash, NodeIndex<usize>>::new(),
-                HashMap::<NodeIndex<usize>, Multihash>::new(),
+                HashMap::<NodeIndex<usize>, i32>::new(),
             ),
-            |(mut dag, mut hash_to_node, mut node_to_hash), (key, refs)| {
+            |(mut dag, mut hash_to_node, mut node_to_key_id), (key, key_id, refs)| {
                 // Check if we've already created a node for key
                 let key_node = hash_to_node
                     .entry(key.clone())
                     .or_insert_with(|| dag.add_node(1))
                     .clone();
-                node_to_hash.entry(key_node).or_insert(key.clone());
+                node_to_key_id.entry(key_node).or_insert(*key_id);
 
                 refs.iter().for_each(|reference| {
                     let ref_node = hash_to_node
                         .entry(reference.clone())
                         .or_insert_with(|| dag.add_node(1));
-                    node_to_hash.entry(*ref_node).or_insert(reference.clone());
                     dag.add_edge(key_node.clone(), *ref_node, 1).expect("The dag has a cycle. This is _VERY_ unexpected. Either the SHA256 hash function is broken, someone is a time traveller, or someone guessed a hash of a message before it was ever created. Most likely this module has a bug :)");
                 });
 
-                (dag, hash_to_node, node_to_hash)
+                (dag, hash_to_node, node_to_key_id)
             },
         );
 
@@ -63,13 +62,8 @@ pub fn causal_sort(msgs: &[(Multihash, &[u8])]) -> Vec<Multihash> {
     let topo = Topo::new(graph);
     topo.iter(graph)
         // map the sorted nodes into multihashes
-        .map(|node| node_to_hash[&node].clone())
-        // filter out all the references that are not ones we're interested in
-        .filter(|key| {
-            msgs.iter()
-                .position(|(msg_key, _)| msg_key == key)
-                .is_some()
-        })
+        .filter_map(|node| node_to_key_id.get(&node))
+        .map(|i| *i)
         .collect()
 }
 
@@ -103,7 +97,7 @@ fn find_all_links(obj: &Value, keys: &mut Vec<Multihash>) {
 #[cfg(test)]
 mod tests {
     use crate::{causal_sort, find_all_links};
-    use serde_json::{json, to_vec};
+    use serde_json::{json, to_string};
     use ssb_multiformats::multihash::Multihash;
 
     #[test]
@@ -118,7 +112,7 @@ mod tests {
                 "arry": ["%3AfrBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256", "%4AfrBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256" ]
             }
         });
-        let v1 = to_vec(&v1_value).unwrap();
+        let v1 = to_string(&v1_value).unwrap();
 
         let k2 = Multihash::from_legacy(b"%reply1K7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256")
             .unwrap()
@@ -126,7 +120,7 @@ mod tests {
         let v2_value = json!({
             "root":  "%rootBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256",
         });
-        let v2 = to_vec(&v2_value).unwrap();
+        let v2 = to_string(&v2_value).unwrap();
         let k3 = Multihash::from_legacy(b"%reply2K7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256")
             .unwrap()
             .0;
@@ -134,16 +128,16 @@ mod tests {
             "root":  "%rootBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256",
             "previous": "%reply1K7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256"
         });
-        let v3 = to_vec(&v3_value).unwrap();
+        let v3 = to_string(&v3_value).unwrap();
 
         let unsorted = [
-            (k2.clone(), v2.as_slice()),
-            (k1.clone(), v1.as_slice()),
-            (k3.clone(), v3.as_slice()),
+            (k2.clone(), 2, v2),
+            (k1.clone(), 1, v1),
+            (k3.clone(), 3, v3),
         ];
         let sorted = causal_sort(&unsorted[..]);
 
-        assert_eq!(sorted.as_slice(), [k3,k2,k1])
+        assert_eq!(sorted.as_slice(), [3,2,1])
     }
     #[test]
     fn it_works_with_orphaned_messages() {
@@ -157,7 +151,7 @@ mod tests {
                 "arry": ["%3AfrBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256", "%4AfrBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256" ]
             }
         });
-        let v1 = to_vec(&v1_value).unwrap();
+        let v1 = to_string(&v1_value).unwrap();
 
         let k2 = Multihash::from_legacy(b"%reply1K7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256")
             .unwrap()
@@ -165,22 +159,22 @@ mod tests {
         let v2_value = json!({
             "root":  "%rootBOK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256",
         });
-        let v2 = to_vec(&v2_value).unwrap();
+        let v2 = to_string(&v2_value).unwrap();
         let k3 = Multihash::from_legacy(b"%orphanK7pZikWM6aupei3PuE5ghRtFM44nrsX0FuBWY=.sha256")
             .unwrap()
             .0;
         let v3_value = json!({
         });
-        let v3 = to_vec(&v3_value).unwrap();
+        let v3 = to_string(&v3_value).unwrap();
 
         let unsorted = [
-            (k2.clone(), v2.as_slice()),
-            (k3.clone(), v3.as_slice()),
-            (k1.clone(), v1.as_slice()),
+            (k2.clone(),2, v2),
+            (k3.clone(),3, v3),
+            (k1.clone(),1, v1),
         ];
         let sorted = causal_sort(&unsorted[..]);
 
-        assert_eq!(sorted.as_slice(), [k3,k2,k1])
+        assert_eq!(sorted.as_slice(), [3,2,1])
     }
 
     #[test]
