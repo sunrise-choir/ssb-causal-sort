@@ -2,6 +2,8 @@
 name = "ssb-causal-sort"
 version = "0.1.1"
 authors = ["Piet Geursen <pietgeursen@gmail.com>"]
+description = "Causally sort a collection of scuttlebutt messages."
+license = "AGPL-3.0"
 edition = "2018"
 
 [dependencies]
