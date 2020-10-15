@@ -7,7 +7,7 @@
 //! - The hash function is not broken (Two different sets of bytes return the same hash.)
 //! - The person publishing `message b` has not guessed a valid hash of a message before it was
 //! published (extremely unlikely.)
-//! - The person publishing `message b` is not a time a traveller. 
+//! - The person publishing `message b` is not a time traveller. 
 //!
 //! This function uses [daggy]() to build a [dag]() of references between messages and then
 //! topologically sorts them.
